@@ -313,10 +313,15 @@ class PhoneBook implements Serializable {
 }
 
 public class App {
-    static final Scanner sc = new Scanner(System.in, StandardCharsets.UTF_8.name());
+    static Scanner sc = new Scanner(System.in, StandardCharsets.UTF_8.name());
 
     static PhoneBook book;
     static String filePath = null;
+
+    static void setScannerInput(String input) {
+        sc = new Scanner(new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)),
+                StandardCharsets.UTF_8.name());
+    }
 
     public static void main(String[] args) {
         if (args.length > 0) {
