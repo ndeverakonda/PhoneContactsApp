@@ -1,350 +1,440 @@
 package org.example;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.ObjectOutputStream;
-import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
+import java.io.*;
+import java.lang.reflect.Method;
 import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
-import java.util.Scanner;
+import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class AppTest {
 
-    private final PrintStream originalOut = System.out;
-    private final PrintStream originalErr = System.err;
-    private final ByteArrayOutputStream out = new ByteArrayOutputStream();
-    private final ByteArrayOutputStream err = new ByteArrayOutputStream();
+    @TempDir
+    Path tempDir;
 
-    private void captureStdout() {
-        System.setOut(new PrintStream(out));
-    }
+    private PrintStream originalOut;
+    private InputStream originalIn;
 
-    private void captureStderr() {
-        System.setErr(new PrintStream(err));
-    }
+    @BeforeEach
+    void setUp() throws Exception {
+        originalOut = System.out;
+        originalIn = System.in;
 
-    private String stdout() {
-        return new String(out.toByteArray(), StandardCharsets.UTF_8);
-    }
+        App.contacts = new ArrayList<>();
+        App.fileName = null;
 
-    private String stderr() {
-        return new String(err.toByteArray(), StandardCharsets.UTF_8);
-    }
-
-    private void setAppInput(String... lines) {
-        String joined = String.join("\n", lines) + "\n";
-        App.setScannerInput(joined);
+        setAppScannerWithInput("");
     }
 
     @AfterEach
-    void restoreGlobals() {
+    void tearDown() {
         System.setOut(originalOut);
-        System.setErr(originalErr);
-        out.reset();
-        err.reset();
-        App.book = null;
-        App.filePath = null;
-        App.sc = new Scanner(System.in, StandardCharsets.UTF_8.name());
+        System.setIn(originalIn);
+    }
+
+    // ----------------------------
+    // Low-level unit coverage
+    // ----------------------------
+
+    @Test
+    void isValidNumber_acceptsCommonFormats_andRejectsBad() {
+        assertTrue(Contact.isValidNumber("123"));
+        assertTrue(Contact.isValidNumber("+0 (123) 456-789-9999"));
+        assertTrue(Contact.isValidNumber("(123) 234 345-456"));
+        assertTrue(Contact.isValidNumber("+123 12 34 56"));
+        assertTrue(Contact.isValidNumber("a1-b2"));
+
+        assertFalse(Contact.isValidNumber("++123"));
+        assertFalse(Contact.isValidNumber(")("));
+        assertFalse(Contact.isValidNumber("")); // matches() on empty should be false
     }
 
     @Test
-    void phoneBook_addRemoveCountGet() {
-        PhoneBook pb = new PhoneBook();
-        assertEquals(0, pb.count());
+    void getNumberPrintable_branches() {
+        PersonContact p = new PersonContact("A", "B", "2000-01-01", "M", "123");
+        assertEquals("123", p.getNumberPrintable());
 
-        Person p = new Person("John", "Smith");
-        Organization o = new Organization("Acme", "NYC");
-
-        pb.add(p);
-        pb.add(o);
-
-        assertEquals(2, pb.count());
-        assertSame(p, pb.get(0));
-        assertSame(o, pb.get(1));
-        assertEquals(2, pb.getRecords().size());
-
-        pb.remove(0);
-        assertEquals(1, pb.count());
-        assertSame(o, pb.get(0));
-    }
-
-    @Test
-    void setNumber_acceptsAndRejectsFormats() {
-        captureStdout();
-        Person p = new Person("A", "B");
-
-        p.setFieldValue("number", "+1 (234) 567-890");
-        assertTrue(p.hasNumber());
-
-        p.setFieldValue("number", "a1b2");
-        assertEquals("a1b2", p.getNumber());
-
-        p.setFieldValue("number", "12(3");
-        assertFalse(p.hasNumber());
-        assertTrue(stdout().contains("Wrong number format!"));
+        p.setNumber("");
+        assertEquals("[no number]", p.getNumberPrintable());
 
         p.setNumber(null);
-        assertFalse(p.hasNumber());
+        assertEquals("[no number]", p.getNumberPrintable());
     }
 
     @Test
-    void person_fields_validation_and_defaults() {
-        captureStdout();
-        Person p = new Person("John", "Smith");
+    void setNumber_invalid_printsMessage_andClearsNumber() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(out));
 
-        assertEquals("", p.getFieldValue("unknown"));
+        OrganizationContact org = new OrganizationContact("Org", "Addr", "123");
+        org.setNumber("++123"); // invalid
+
+        assertEquals("[no number]", org.getNumberPrintable());
+        assertTrue(out.toString().contains("Wrong number format!"));
+    }
+
+    @Test
+    void person_birth_and_gender_all_branches_plus_switches() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(out));
+
+        PersonContact p = new PersonContact("John", "Smith", "", "", "123");
+
+        // birth: empty -> [no data]
         assertEquals("[no data]", p.getFieldValue("birth"));
+        // gender: empty -> [no data]
         assertEquals("[no data]", p.getFieldValue("gender"));
-        assertEquals("[no number]", p.getFieldValue("number"));
 
-        p.setFieldValue("birth", "2000-02-29");
-        p.setFieldValue("gender", "F");
-        assertEquals("2000-02-29", p.getFieldValue("birth"));
+        // invalid birth
+        p.setBirthDate("nope");
+        assertEquals("[no data]", p.getFieldValue("birth"));
+
+        // valid birth
+        p.setBirthDate("1999-12-31");
+        assertEquals("1999-12-31", p.getFieldValue("birth"));
+
+        // invalid gender
+        p.setGender("x");
+        assertEquals("[no data]", p.getFieldValue("gender"));
+
+        // valid gender with lower-case input
+        p.setGender("f");
         assertEquals("F", p.getFieldValue("gender"));
 
-        p.setFieldValue("birth", "bad-date");
-        p.setFieldValue("gender", "X");
-        p.setFieldValue("birth", "");
-        p.setFieldValue("gender", "");
-        p.setFieldValue("unknown", "value");
+        // setField switch coverage
+        p.setField("name", "A");
+        p.setField("surname", "B");
+        p.setField("birth", "2001-01-01");
+        p.setField("gender", "M");
+        p.setField("number", "555");
+        p.setField("unknown", "zzz"); // default
 
-        assertEquals("[no data]", p.getFieldValue("birth"));
-        assertEquals("[no data]", p.getFieldValue("gender"));
-        assertTrue(stdout().contains("Bad birth date!"));
-        assertTrue(stdout().contains("Bad gender!"));
+        assertEquals("A", p.getFieldValue("name"));
+        assertEquals("B", p.getFieldValue("surname"));
+        assertEquals("2001-01-01", p.getFieldValue("birth"));
+        assertEquals("M", p.getFieldValue("gender"));
+        assertEquals("555", p.getFieldValue("number"));
+        assertEquals("", p.getFieldValue("unknown"));
+
+        String printed = out.toString();
+        assertTrue(printed.contains("Bad birth date!"));
+        assertTrue(printed.contains("Bad gender!"));
     }
 
     @Test
-    void organization_fields_and_printInfo() {
-        captureStdout();
-        Organization o = new Organization("OpenAI", "SF");
+    void organization_switches_and_printInfo_lines() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(out));
 
+        OrganizationContact o = new OrganizationContact("Acme", "Delhi", "999");
+        o.printInfo(); // line coverage
+
+        // setField switch coverage
+        o.setField("name", "OpenAI");
+        o.setField("address", "SF");
+        o.setField("number", "123");
+        o.setField("unknown", "zzz"); // default
+
+        assertEquals("OpenAI", o.getFieldValue("name"));
+        assertEquals("SF", o.getFieldValue("address"));
+        assertEquals("123", o.getFieldValue("number"));
         assertEquals("", o.getFieldValue("unknown"));
-        assertEquals("OpenAI", o.getListName());
 
-        o.setFieldValue("number", "12(3");
-        assertEquals("[no number]", o.getFieldValue("number"));
+        assertTrue(out.toString().contains("Organization name:"));
+    }
 
-        o.setFieldValue("name", "OpenAI Labs");
-        o.setFieldValue("address", "San Francisco");
-        o.setFieldValue("number", "123-45-67");
-        o.setFieldValue("unknown", "ignored");
+    // ----------------------------
+    // Save/load coverage
+    // ----------------------------
 
-        o.printInfo();
-        assertTrue(stdout().contains("Organization name: OpenAI Labs"));
-        assertTrue(stdout().contains("Address: San Francisco"));
-        assertEquals("123-45-67", o.getNumber());
+    @Test
+    void save_whenFileNameNull_returnsImmediately() {
+        App.fileName = null;
+        App.contacts.add(new PersonContact("A", "B", "2000-01-01", "M", "123"));
+        assertDoesNotThrow(App::save);
     }
 
     @Test
-    void searchIndexes_regexAndFallbackLiteral() {
-        PhoneBook pb = new PhoneBook();
-        Person p1 = new Person("John", "Smith");
-        Person p2 = new Person("Alice", "Johnson");
-        Organization o = new Organization("OpenAI", "SF");
+    void load_whenMissing_createsEmptyFile_andEmptyList() {
+        File f = tempDir.resolve("phonebook.db").toFile();
+        assertFalse(f.exists());
 
-        pb.add(p1);
-        pb.add(p2);
-        pb.add(o);
-        App.book = pb;
+        App.fileName = f.getAbsolutePath();
+        App.load();
 
-        assertEquals(Arrays.asList(0, 1), App.searchIndexes("john"));
-        assertEquals(Collections.singletonList(2), App.searchIndexes("open.*"));
-        List<Integer> fallbackMatches = App.searchIndexes("[");
-        assertFalse(fallbackMatches.isEmpty());
-        assertTrue(fallbackMatches.contains(0));
+        assertNotNull(App.contacts);
+        assertEquals(0, App.contacts.size());
+        assertTrue(f.exists());
     }
 
     @Test
-    void add_person_organization_and_unknownType() {
-        captureStdout();
-        App.book = new PhoneBook();
+    void save_then_load_roundTrip() {
+        File f = tempDir.resolve("pb.db").toFile();
+        App.fileName = f.getAbsolutePath();
 
-        setAppInput("person", "John", "Smith", "2001-01-01", "M", "+1 234 567");
-        App.add();
-        assertEquals(1, App.book.count());
-        assertTrue(App.book.get(0) instanceof Person);
+        App.contacts.add(new PersonContact("John", "Smith", "1999-12-31", "M", "123"));
+        App.contacts.add(new OrganizationContact("Org", "Addr", "999"));
 
-        setAppInput("organization", "Acme", "NYC", "111-22-33");
-        App.add();
-        assertEquals(2, App.book.count());
-        assertTrue(App.book.get(1) instanceof Organization);
+        App.save();
+        App.contacts = new ArrayList<>();
+        App.load();
 
-        setAppInput("other");
-        App.add();
-        assertEquals(2, App.book.count());
-        assertTrue(stdout().contains("The record added."));
+        assertEquals(2, App.contacts.size());
+        assertEquals("John Smith", App.contacts.get(0).getListName());
+        assertEquals("Org", App.contacts.get(1).getListName());
     }
 
     @Test
-    void listMenu_empty_invalid_back_and_recordPath() {
-        captureStdout();
-        App.book = new PhoneBook();
+    void load_withCorruptFile_fallsBackToEmpty() throws IOException {
+        File f = tempDir.resolve("corrupt.db").toFile();
+        App.fileName = f.getAbsolutePath();
 
-        App.listMenu();
-        assertTrue(stdout().contains("No records to list!"));
-
-        App.book.add(new Person("John", "Smith"));
-
-        setAppInput("abc");
-        App.listMenu();
-
-        setAppInput("99");
-        App.listMenu();
-
-        setAppInput("back");
-        App.listMenu();
-
-        setAppInput("1", "menu");
-        App.listMenu();
-        assertTrue(stdout().contains("Name: John"));
-    }
-
-    @Test
-    void searchMenu_empty_again_back_invalid_and_pickRecord() {
-        captureStdout();
-        App.book = new PhoneBook();
-
-        App.searchMenu();
-        assertTrue(stdout().contains("No records to search!"));
-
-        App.book.add(new Person("John", "Smith"));
-        App.book.add(new Person("Alice", "Johnson"));
-
-        setAppInput("john", "again", "john", "back");
-        App.searchMenu();
-
-        setAppInput("john", "NaN");
-        App.searchMenu();
-
-        setAppInput("john", "99");
-        App.searchMenu();
-
-        setAppInput("john", "1", "menu");
-        App.searchMenu();
-        assertTrue(stdout().contains("Found 2 results:"));
-    }
-
-    @Test
-    void recordMenu_menu_delete_edit_and_unknownAction() {
-        captureStdout();
-        App.book = new PhoneBook();
-
-        Person p = new Person("Jane", "Doe");
-        App.book.add(p);
-
-        setAppInput("menu");
-        App.recordMenu(0);
-
-        setAppInput("noop", "menu");
-        App.recordMenu(0);
-
-        setAppInput("edit", "name", "Janet", "menu");
-        App.recordMenu(0);
-        assertEquals("Janet", ((Person) App.book.get(0)).getFieldValue("name"));
-
-        setAppInput("delete");
-        App.recordMenu(0);
-        assertEquals(0, App.book.count());
-        assertTrue(stdout().contains("The record removed!"));
-        assertTrue(stdout().contains("Saved"));
-    }
-
-    @Test
-    void saveIfNeeded_savesOnlyWhenPathPresent(@TempDir Path tempDir) {
-        App.book = new PhoneBook();
-        App.book.add(new Person("A", "B"));
-
-        Path file = tempDir.resolve("book.db");
-        App.filePath = null;
-        App.saveIfNeeded();
-        assertFalse(Files.exists(file));
-
-        App.filePath = file.toString();
-        App.saveIfNeeded();
-        assertTrue(Files.exists(file));
-    }
-
-    @Test
-    void saveAndLoad_roundTrip_nonexistent_wrongType_and_ioError(@TempDir Path tempDir) throws IOException {
-        captureStderr();
-
-        Path file = tempDir.resolve("phonebook.db");
-
-        PhoneBook pb = new PhoneBook();
-        Person p = new Person("John", "Smith");
-        p.setFieldValue("birth", "1999-01-01");
-        p.setFieldValue("gender", "M");
-        p.setFieldValue("number", "+1 234 567 890");
-        pb.add(p);
-
-        App.save(file.toString(), pb);
-        PhoneBook loaded = App.load(file.toString());
-        assertEquals(1, loaded.count());
-        assertEquals("John Smith", loaded.get(0).getListName());
-
-        Path missing = tempDir.resolve("missing.bin");
-        PhoneBook missingLoad = App.load(missing.toString());
-        assertEquals(0, missingLoad.count());
-
-        Path wrongType = tempDir.resolve("wrongtype.bin");
-        try (ObjectOutputStream oos = new ObjectOutputStream(Files.newOutputStream(wrongType))) {
-            oos.writeObject("not-a-phonebook");
+        try (FileOutputStream fos = new FileOutputStream(f)) {
+            fos.write(new byte[]{1, 2, 3, 4, 5});
         }
-        PhoneBook wrongTypeLoad = App.load(wrongType.toString());
-        assertEquals(0, wrongTypeLoad.count());
 
-        Path badSaveTarget = tempDir.resolve("dir-target");
-        Files.createDirectory(badSaveTarget);
-        App.save(badSaveTarget.toString(), pb);
-        assertTrue(stderr().contains("Failed to save phone book:"));
+        App.load();
+        assertNotNull(App.contacts);
+        assertEquals(0, App.contacts.size());
     }
 
     @Test
-    void main_handles_noArgs_and_withArgs(@TempDir Path tempDir) {
-        captureStdout();
+    void printSavedIfFile_branches() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(out));
 
-        setAppInput("count", "unknown", "exit");
-        App.main(new String[]{});
-        assertTrue(stdout().contains("The Phone Book has 0 records."));
+        App.fileName = null;
+        App.printSavedIfFile();
+        assertEquals("", out.toString());
 
+        App.fileName = tempDir.resolve("x.db").toString();
+        App.printSavedIfFile();
+        assertTrue(out.toString().contains("Saved"));
+    }
+
+    // ----------------------------
+    // Drive PRIVATE interactive flows (big branch wins)
+    // ----------------------------
+
+    @Test
+    void add_person_and_organization_and_unknownType() throws Exception {
+        // Use a real file so save() runs (and "Saved" branch can happen)
+        File f = tempDir.resolve("data.db").toFile();
+        App.fileName = f.getAbsolutePath();
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(out));
+
+        // 1) person
+        setAppScannerWithInput(
+                "person\n" +
+                        "John\n" +
+                        "Smith\n" +
+                        "1999-12-31\n" +
+                        "M\n" +
+                        "123\n"
+        );
+        invokePrivateStatic("add");
+
+        // 2) organization
+        setAppScannerWithInput(
+                "organization\n" +
+                        "Acme\n" +
+                        "Delhi\n" +
+                        "999\n"
+        );
+        invokePrivateStatic("add");
+
+        // 3) unknown -> should do nothing (covers add() falling through)
+        setAppScannerWithInput("something-else\n");
+        invokePrivateStatic("add");
+
+        assertEquals(2, App.contacts.size());
+        assertTrue(out.toString().contains("The record added."));
+        assertTrue(out.toString().contains("Saved"));
+    }
+
+    @Test
+    void listMenu_back_branch_and_invalidInput_loop_then_selectRecord_then_menu() throws Exception {
+        App.contacts.add(new PersonContact("John", "Smith", "1999-12-31", "M", "123"));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(out));
+
+        // First call: just "back"
+        setAppScannerWithInput("back\n");
+        invokePrivateStatic("listMenu");
+        assertTrue(out.toString().contains("1. John Smith"));
+
+        // Second call: invalid -> still loops -> valid "1" -> inside recordMenu -> choose "menu"
         out.reset();
-        PhoneBook pb = new PhoneBook();
-        pb.add(new Person("Main", "Load"));
-        Path db = tempDir.resolve("main.db");
-        App.save(db.toString(), pb);
-
-        setAppInput("exit");
-        App.main(new String[]{db.toString()});
-        assertTrue(stdout().contains("open " + db));
+        setAppScannerWithInput(
+                "abc\n" +   // not a number, not back
+                        "0\n" +     // number but invalid idx
+                        "1\n" +     // valid -> recordMenu
+                        "menu\n"    // exit recordMenu
+        );
+        invokePrivateStatic("listMenu");
+        assertTrue(out.toString().contains("[record] Enter action"));
     }
 
     @Test
-    void printInfo_forPerson_and_searchText() {
-        captureStdout();
-        Person p = new Person("Neo", "Anderson");
-        p.setFieldValue("birth", "1964-03-11");
-        p.setFieldValue("gender", "M");
-        p.setFieldValue("number", "101-22-33");
+    void searchMenu_again_branch_selectRecord_then_menu_and_back_branch() throws Exception {
+        App.contacts.add(new PersonContact("John", "Smith", "1999-12-31", "M", "123"));
+        App.contacts.add(new OrganizationContact("Acme", "Delhi", "999"));
 
-        String searchText = p.getSearchText();
-        assertTrue(searchText.contains("Neo"));
-        assertTrue(searchText.contains("Anderson"));
-        assertTrue(searchText.contains("101-22-33"));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(out));
 
-        p.printInfo();
-        List<String> fields = p.getEditableFields();
-        assertEquals(Arrays.asList("name", "surname", "birth", "gender", "number"), fields);
-        assertTrue(stdout().contains("Name: Neo"));
+        // searchMenu flow:
+        // doSearchOnce: query "john" -> 1 result
+        // then cmd "again" -> new query "acme" -> 1 result
+        // then cmd "1" -> open recordMenu -> "menu"
+        setAppScannerWithInput(
+                "john\n" +
+                        "again\n" +
+                        "acme\n" +
+                        "1\n" +
+                        "menu\n"
+        );
+        invokePrivateStatic("searchMenu");
+        assertTrue(out.toString().contains("Found 1 results:"));
+        assertTrue(out.toString().toLowerCase(Locale.ROOT).contains("acme"));
+
+        // Also cover searchMenu "back" branch quickly
+        out.reset();
+        setAppScannerWithInput(
+                "john\n" +
+                        "back\n"
+        );
+        invokePrivateStatic("searchMenu");
+        assertTrue(out.toString().contains("[search] Enter action"));
+    }
+
+    @Test
+    void recordMenu_edit_branch_then_delete_branch() throws Exception {
+        File f = tempDir.resolve("records.db").toFile();
+        App.fileName = f.getAbsolutePath();
+
+        App.contacts.add(new PersonContact("John", "Smith", "1999-12-31", "M", "123"));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(out));
+
+        // recordMenu:
+        // edit -> choose field "name" -> set "Jane"
+        // then delete
+        setAppScannerWithInput(
+                "edit\n" +
+                        "name\n" +
+                        "Jane\n" +
+                        "delete\n"
+        );
+        invokePrivateStatic("recordMenu", int.class, 0);
+
+        assertEquals(0, App.contacts.size());
+        String printed = out.toString();
+        assertTrue(printed.contains("The record updated!"));
+        assertTrue(printed.contains("The record removed!"));
+        assertTrue(printed.contains("Saved"));
+    }
+
+    @Test
+    void doSearchOnce_patternSyntaxException_branch() throws Exception {
+        App.contacts.add(new OrganizationContact("OpenAI", "San Francisco", "999"));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(out));
+
+        // bad regex -> PatternSyntaxException -> Pattern.quote branch
+        setAppScannerWithInput("[\n");
+        @SuppressWarnings("unchecked")
+        List<Integer> results = (List<Integer>) invokePrivateStatic("doSearchOnce");
+
+        assertEquals(0, results.size());
+        assertTrue(out.toString().contains("Found 0 results:"));
+    }
+
+    @Test
+    void count_prints_correct_size() throws Exception {
+        App.contacts.add(new PersonContact("A", "B", "2000-01-01", "M", "123"));
+        App.contacts.add(new OrganizationContact("Org", "Addr", "999"));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(out));
+
+        invokePrivateStatic("count");
+        assertTrue(out.toString().contains("The Phone Book has 2 records."));
+    }
+
+    // ----------------------------
+    // Run main() to cover top-level switch + default + exit
+    // ----------------------------
+
+    @Test
+    void main_drives_menu_switch_default_and_exit() {
+        // Script:
+        // unknown action -> default branch
+        // count -> prints 0
+        // exit -> return
+        setAppScannerWithInput(
+                "whatever\n" +
+                        "count\n" +
+                        "exit\n"
+        );
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(out));
+
+        assertDoesNotThrow(() -> App.main(new String[]{}));
+
+        String printed = out.toString();
+        assertTrue(printed.contains("[menu] Enter action"));
+        assertTrue(printed.contains("The Phone Book has 0 records."));
+    }
+
+    // ----------------------------
+    // isNumber helper (private)
+    // ----------------------------
+
+    @Test
+    void isNumber_privateHelper_more_branches() throws Exception {
+        assertFalse((boolean) invokePrivateStatic("isNumber", String.class, (Object) null));
+        assertFalse((boolean) invokePrivateStatic("isNumber", String.class, ""));
+        assertFalse((boolean) invokePrivateStatic("isNumber", String.class, " 123")); // space
+        assertFalse((boolean) invokePrivateStatic("isNumber", String.class, "12a3"));
+        assertTrue((boolean) invokePrivateStatic("isNumber", String.class, "0"));
+        assertTrue((boolean) invokePrivateStatic("isNumber", String.class, "123"));
+    }
+
+    // ----------------------------
+    // Helpers
+    // ----------------------------
+
+    private void setAppScannerWithInput(String input) {
+        // Your compiled class allows this (as seen in your decompiled output)
+        App.sc = new Scanner(new ByteArrayInputStream(input.getBytes()));
+    }
+
+    private static Object invokePrivateStatic(String methodName, Object... args) throws Exception {
+        Method target = null;
+        for (Method m : App.class.getDeclaredMethods()) {
+            if (m.getName().equals(methodName) && m.getParameterCount() == args.length) {
+                target = m;
+                break;
+            }
+        }
+        assertNotNull(target, "Method not found: " + methodName);
+        target.setAccessible(true);
+        return target.invoke(null, args);
+    }
+
+    private static Object invokePrivateStatic(String methodName, Class<?> p1, Object a1) throws Exception {
+        Method m = App.class.getDeclaredMethod(methodName, p1);
+        m.setAccessible(true);
+        return m.invoke(null, a1);
     }
 }

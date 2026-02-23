@@ -8,18 +8,21 @@ import java.util.*;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
-abstract class Record implements Serializable {
-    private String number = "";
-    private final LocalDateTime timeCreated;
-    private LocalDateTime timeLastEdit;
+abstract class Contact implements Serializable {
+    private static final long serialVersionUID = 1L;
 
-    protected Record() {
-        timeCreated = LocalDateTime.now();
-        timeLastEdit = timeCreated;
+    protected String number = "";
+    protected final LocalDateTime timeCreated;
+    protected LocalDateTime timeLastEdit;
+
+    protected Contact(String number) {
+        this.timeCreated = LocalDateTime.now();
+        this.timeLastEdit = this.timeCreated;
+        setNumber(number);
     }
 
-    public String getNumber() {
-        return number;
+    protected void touch() {
+        timeLastEdit = LocalDateTime.now();
     }
 
     public void setNumber(String number) {
@@ -37,8 +40,8 @@ abstract class Record implements Serializable {
         touch();
     }
 
-    public boolean hasNumber() {
-        return number != null && !number.isEmpty();
+    public String getNumberPrintable() {
+        return (number == null || number.isEmpty()) ? "[no number]" : number;
     }
 
     public LocalDateTime getTimeCreated() {
@@ -49,163 +52,82 @@ abstract class Record implements Serializable {
         return timeLastEdit;
     }
 
-    protected void touch() {
-        timeLastEdit = LocalDateTime.now();
-    }
+    // ----- Polymorphism methods (Main uses only these) -----
+    public abstract String getListName();                  // for list/search results
+    public abstract void printInfo();                      // record details
+    public abstract String[] getEditableFields();          // fields you can edit
+    public abstract void setField(String field, String v); // edit a field
+    public abstract String getFieldValue(String field);    // read a field value
+    public abstract String getSearchText();                // for searching
 
-    public abstract List<String> getEditableFields();
-    public abstract String getFieldValue(String field);
-    public abstract void setFieldValue(String field, String value);
-    public abstract String getListName();
-    public abstract void printInfo();
-
-    public String getSearchText() {
-        StringBuilder sb = new StringBuilder();
-        for (String f : getEditableFields()) {
-            sb.append(getFieldValue(f)).append(" ");
+    // ----- Phone validation (your regex) -----
+    public static boolean isValidNumber(String number) {
+        if (number == null || number.isEmpty()) {
+            return false;
         }
-        sb.append(hasNumber() ? getNumber() : "[no number]").append(" ");
-        sb.append(getTimeCreated()).append(" ");
-        sb.append(getTimeLastEdit());
-        return sb.toString();
-    }
-
-    private boolean isValidNumber(String number) {
-        String s = number;
-        if (s.startsWith("+")) s = s.substring(1);
-
-        List<String> groups = new ArrayList<>();
-        StringBuilder cur = new StringBuilder();
-        for (int i = 0; i < s.length(); i++) {
-            char ch = s.charAt(i);
-            if (ch == ' ' || ch == '-') {
-                if (cur.length() > 0) {
-                    groups.add(cur.toString());
-                    cur.setLength(0);
-                }
-            } else {
-                cur.append(ch);
-            }
-        }
-        if (cur.length() > 0) groups.add(cur.toString());
-
-        if (groups.isEmpty()) return false;
-
-        int parenGroups = 0;
-        for (int idx = 0; idx < groups.size(); idx++) {
-            String g = groups.get(idx);
-
-            boolean wrapped = g.startsWith("(") && g.endsWith(")");
-            boolean hasAnyParen = g.indexOf('(') >= 0 || g.indexOf(')') >= 0;
-
-            if (wrapped) {
-                parenGroups++;
-                if (idx > 1) return false;
-                g = g.substring(1, g.length() - 1);
-                if (g.isEmpty()) return false;
-            } else {
-                if (hasAnyParen) return false;
-            }
-
-            for (int k = 0; k < g.length(); k++) {
-                char c = g.charAt(k);
-                if (!Character.isLetterOrDigit(c)) return false;
-            }
-
-            if (idx == 0) {
-                if (g.length() < 1) return false;
-            } else {
-                if (g.length() < 2) return false;
-            }
-        }
-        return parenGroups <= 1;
+        String regex1 = "[+]?[a-zA-Z0-9]?([\\s-]?[a-zA-Z0-9]{2,})*";
+        String regex2 = "[+]?(\\([a-zA-Z0-9]+\\))([\\s-][a-zA-Z0-9]{2,})*";
+        String regex3 = "[+]?[a-zA-Z0-9]{1,}[\\s-]\\([a-zA-Z0-9]{2,}\\)([\\s-][a-zA-Z0-9]{2,})*";
+        return number.matches(regex1) || number.matches(regex2) || number.matches(regex3);
     }
 }
 
-class Person extends Record {
+class PersonContact extends Contact {
     private static final long serialVersionUID = 1L;
+
     private String name;
     private String surname;
-    private String birth = "";
-    private String gender = "";
+    private String birthDate = "[no data]";
+    private String gender = "[no data]";
 
-    public Person(String name, String surname) {
-        super();
-        this.name = name;
-        this.surname = surname;
+    public PersonContact(String name, String surname, String birthDate, String gender, String number) {
+        super(number);
+        setName(name);
+        setSurname(surname);
+        setBirthDate(birthDate);
+        setGender(gender);
     }
 
-    @Override
-    public List<String> getEditableFields() {
-        return Arrays.asList("name", "surname", "birth", "gender", "number");
+    public void setName(String name) {
+        this.name = (name == null) ? "" : name;
+        touch();
     }
 
-    @Override
-    public String getFieldValue(String field) {
-        switch (field) {
-            case "name": return name;
-            case "surname": return surname;
-            case "birth": return birth.isEmpty() ? "[no data]" : birth;
-            case "gender": return gender.isEmpty() ? "[no data]" : gender;
-            case "number": return hasNumber() ? getNumber() : "[no number]";
-            default: return "";
-        }
+    public void setSurname(String surname) {
+        this.surname = (surname == null) ? "" : surname;
+        touch();
     }
 
-    @Override
-    public void setFieldValue(String field, String value) {
-        switch (field) {
-            case "name":
-                name = value;
-                touch();
-                break;
-            case "surname":
-                surname = value;
-                touch();
-                break;
-            case "birth":
-                setBirth(value);
-                break;
-            case "gender":
-                setGender(value);
-                break;
-            case "number":
-                setNumber(value);
-                break;
-            default:
-                break;
-        }
-    }
-
-    private void setBirth(String birth) {
-        if (birth == null || birth.isEmpty()) {
+    public void setBirthDate(String birthDateInput) {
+        if (birthDateInput == null || birthDateInput.isEmpty()) {
             System.out.println("Bad birth date!");
-            this.birth = "";
+            this.birthDate = "[no data]";
             touch();
             return;
         }
         try {
-            LocalDate.parse(birth);
-            this.birth = birth;
+            LocalDate.parse(birthDateInput.trim()); // yyyy-MM-dd
+            this.birthDate = birthDateInput.trim();
         } catch (Exception e) {
             System.out.println("Bad birth date!");
-            this.birth = "";
+            this.birthDate = "[no data]";
         }
         touch();
     }
 
-    private void setGender(String gender) {
-        if (gender == null || gender.isEmpty()) {
+    public void setGender(String genderInput) {
+        if (genderInput == null || genderInput.isEmpty()) {
             System.out.println("Bad gender!");
-            this.gender = "";
+            this.gender = "[no data]";
             touch();
             return;
         }
-        if (!gender.equals("M") && !gender.equals("F")) {
-            System.out.println("Bad gender!");
-            this.gender = "";
+        String g = genderInput.trim().toUpperCase(Locale.ROOT);
+        if (g.equals("M") || g.equals("F")) {
+            this.gender = g;
         } else {
-            this.gender = gender;
+            System.out.println("Bad gender!");
+            this.gender = "[no data]";
         }
         touch();
     }
@@ -219,57 +141,86 @@ class Person extends Record {
     public void printInfo() {
         System.out.println("Name: " + name);
         System.out.println("Surname: " + surname);
-        System.out.println("Birth date: " + (birth.isEmpty() ? "[no data]" : birth));
-        System.out.println("Gender: " + (gender.isEmpty() ? "[no data]" : gender));
-        System.out.println("Number: " + (hasNumber() ? getNumber() : "[no number]"));
+        System.out.println("Birth date: " + birthDate);
+        System.out.println("Gender: " + gender);
+        System.out.println("Number: " + getNumberPrintable());
         System.out.println("Time created: " + getTimeCreated());
         System.out.println("Time last edit: " + getTimeLastEdit());
     }
-}
 
-class Organization extends Record {
-    private static final long serialVersionUID = 1L;
-    private String name;
-    private String address;
-
-    public Organization(String name, String address) {
-        super();
-        this.name = name;
-        this.address = address;
+    @Override
+    public String[] getEditableFields() {
+        return new String[]{"name", "surname", "birth", "gender", "number"};
     }
 
     @Override
-    public List<String> getEditableFields() {
-        return Arrays.asList("name", "address", "number");
+    public void setField(String field, String v) {
+        switch (field) {
+            case "name":
+                setName(v);
+                break;
+            case "surname":
+                setSurname(v);
+                break;
+            case "birth":
+                setBirthDate(v);
+                break;
+            case "gender":
+                setGender(v);
+                break;
+            case "number":
+                setNumber(v);
+                break;
+            default:
+                break;
+        }
     }
 
     @Override
     public String getFieldValue(String field) {
         switch (field) {
-            case "name": return name;
-            case "address": return address;
-            case "number": return hasNumber() ? getNumber() : "[no number]";
-            default: return "";
+            case "name":
+                return name;
+            case "surname":
+                return surname;
+            case "birth":
+                return birthDate;
+            case "gender":
+                return gender;
+            case "number":
+                return getNumberPrintable();
+            default:
+                return "";
         }
     }
 
     @Override
-    public void setFieldValue(String field, String value) {
-        switch (field) {
-            case "name":
-                name = value;
-                touch();
-                break;
-            case "address":
-                address = value;
-                touch();
-                break;
-            case "number":
-                setNumber(value);
-                break;
-            default:
-                break;
-        }
+    public String getSearchText() {
+        // append all fields for searching
+        return (name + " " + surname + " " + birthDate + " " + gender + " " + getNumberPrintable()).toLowerCase(Locale.ROOT);
+    }
+}
+
+class OrganizationContact extends Contact {
+    private static final long serialVersionUID = 1L;
+
+    private String name;    // organization name
+    private String address;
+
+    public OrganizationContact(String name, String address, String number) {
+        super(number);
+        setName(name);
+        setAddress(address);
+    }
+
+    public void setName(String name) {
+        this.name = (name == null) ? "" : name;
+        touch();
+    }
+
+    public void setAddress(String address) {
+        this.address = (address == null) ? "" : address;
+        touch();
     }
 
     @Override
@@ -281,59 +232,65 @@ class Organization extends Record {
     public void printInfo() {
         System.out.println("Organization name: " + name);
         System.out.println("Address: " + address);
-        System.out.println("Number: " + (hasNumber() ? getNumber() : "[no number]"));
+        System.out.println("Number: " + getNumberPrintable());
         System.out.println("Time created: " + getTimeCreated());
         System.out.println("Time last edit: " + getTimeLastEdit());
     }
-}
 
-class PhoneBook implements Serializable {
-    private static final long serialVersionUID = 1L;
-    private final List<Record> records = new ArrayList<>();
-
-    public int count() {
-        return records.size();
+    @Override
+    public String[] getEditableFields() {
+        return new String[]{"name", "address", "number"};
     }
 
-    public void add(Record r) {
-        records.add(r);
+    @Override
+    public void setField(String field, String v) {
+        switch (field) {
+            case "name":
+                setName(v);
+                break;
+            case "address":
+                setAddress(v);
+                break;
+            case "number":
+                setNumber(v);
+                break;
+            default:
+                break;
+        }
     }
 
-    public void remove(int idx) {
-        records.remove(idx);
+    @Override
+    public String getFieldValue(String field) {
+        switch (field) {
+            case "name":
+                return name;
+            case "address":
+                return address;
+            case "number":
+                return getNumberPrintable();
+            default:
+                return "";
+        }
     }
 
-    public Record get(int idx) {
-        return records.get(idx);
-    }
-
-    public List<Record> getRecords() {
-        return records;
+    @Override
+    public String getSearchText() {
+        return (name + " " + address + " " + getNumberPrintable()).toLowerCase(Locale.ROOT);
     }
 }
 
 public class App {
     static Scanner sc = new Scanner(System.in, StandardCharsets.UTF_8.name());
-
-    static PhoneBook book;
-    static String filePath = null;
-
-    static void setScannerInput(String input) {
-        sc = new Scanner(new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)),
-                StandardCharsets.UTF_8.name());
-    }
+    static List<Contact> contacts = new ArrayList<>();
+    static String fileName = null;
 
     public static void main(String[] args) {
         if (args.length > 0) {
-            filePath = args[0];
-            System.out.println("open " + filePath);
-            book = load(filePath);
-        } else {
-            book = new PhoneBook();
+            fileName = args[0];
+            load();
         }
 
-        boolean keepSearching = true;
-        while (keepSearching) {
+        while (true) {
             System.out.print("[menu] Enter action (add, list, search, count, exit): ");
             String action = sc.nextLine().trim();
 
@@ -348,7 +305,7 @@ public class App {
                     searchMenu();
                     break;
                 case "count":
-                    System.out.println("The Phone Book has " + book.count() + " records.");
+                    count();
                     break;
                 case "exit":
                     return;
@@ -356,208 +313,216 @@ public class App {
                     break;
             }
 
-            System.out.println(); // ✅ ALWAYS one empty line after each action
+            // empty line between actions
+            System.out.println();
         }
     }
 
-    static void add() {
+    // ---------- Save / Load ----------
+    static void save() {
+        if (fileName == null) return;
+
+        try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(fileName))) {
+            oos.writeObject(contacts);
+        } catch (IOException ignored) {
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    static void load() {
+        File f = new File(fileName);
+        if (!f.exists()) {
+            contacts = new ArrayList<>();
+            save(); // create empty file
+            return;
+        }
+
+        try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(fileName))) {
+            Object obj = ois.readObject();
+            contacts = (List<Contact>) obj;
+        } catch (IOException | ClassNotFoundException | ClassCastException e) {
+            contacts = new ArrayList<>();
+        }
+    }
+
+    static void printSavedIfFile() {
+        if (fileName != null) {
+            System.out.println("Saved");
+        }
+    }
+
+    // ---------- Menu actions ----------
+    private static void add() {
         System.out.print("Enter the type (person, organization): ");
         String type = sc.nextLine().trim();
 
         if ("person".equals(type)) {
             System.out.print("Enter the name: ");
             String name = sc.nextLine();
+
             System.out.print("Enter the surname: ");
             String surname = sc.nextLine();
 
-            Person p = new Person(name, surname);
-
             System.out.print("Enter the birth date: ");
-            p.setFieldValue("birth", sc.nextLine());
+            String birth = sc.nextLine();
 
             System.out.print("Enter the gender (M, F): ");
-            p.setFieldValue("gender", sc.nextLine().trim());
+            String gender = sc.nextLine();
 
             System.out.print("Enter the number: ");
-            p.setFieldValue("number", sc.nextLine());
+            String number = sc.nextLine();
 
-            book.add(p);
+            contacts.add(new PersonContact(name, surname, birth, gender, number));
+            save();
+            System.out.println("The record added.");
+            printSavedIfFile();
+
         } else if ("organization".equals(type)) {
             System.out.print("Enter the organization name: ");
-            String name = sc.nextLine();
+            String orgName = sc.nextLine();
+
             System.out.print("Enter the address: ");
             String address = sc.nextLine();
 
-            Organization o = new Organization(name, address);
-
             System.out.print("Enter the number: ");
-            o.setFieldValue("number", sc.nextLine());
+            String number = sc.nextLine();
 
-            book.add(o);
+            contacts.add(new OrganizationContact(orgName, address, number));
+            save();
+            System.out.println("The record added.");
+            printSavedIfFile();
         }
-
-        System.out.println("The record added.");
-        saveIfNeeded();
     }
 
-    static void listMenu() {
-        if (book.count() == 0) {
-            System.out.println("No records to list!");
-            return;
-        }
-        for (int i = 0; i < book.count(); i++) {
-            System.out.println((i + 1) + ". " + book.get(i).getListName());
-        }
-
-        System.out.print("[list] Enter action ([number], back): ");
-        String cmd = sc.nextLine().trim();
-        if ("back".equals(cmd)) return;
-
-        int idx;
-        try {
-            idx = Integer.parseInt(cmd) - 1;
-        } catch (NumberFormatException e) {
-            return;
-        }
-        if (idx < 0 || idx >= book.count()) return;
-
-        System.out.println();
-        System.out.println();
-        recordMenu(idx);
+    private static void count() {
+        System.out.println("The Phone Book has " + contacts.size() + " records.");
     }
 
-    static void searchMenu() {
-        if (book.count() == 0) {
-            System.out.println("No records to search!");
-            return;
+    // ---------- List flow ----------
+    private static void listMenu() {
+        for (int i = 0; i < contacts.size(); i++) {
+            System.out.println((i + 1) + ". " + contacts.get(i).getListName());
         }
 
-        boolean keepSearching = true;
-        while (keepSearching) {
-            System.out.print("Enter search query: ");
-            String query = sc.nextLine();
+        while (true) {
+            System.out.print("[list] Enter action ([number], back): ");
+            String cmd = sc.nextLine().trim();
 
-            List<Integer> found = searchIndexes(query);
+            if ("back".equals(cmd)) return;
 
-            System.out.println("Found " + found.size() + " results:");
-            for (int i = 0; i < found.size(); i++) {
-                System.out.println((i + 1) + ". " + book.get(found.get(i)).getListName());
+            if (isNumber(cmd)) {
+                int idx = Integer.parseInt(cmd) - 1;
+                if (idx >= 0 && idx < contacts.size()) {
+                    recordMenu(idx);
+                    System.out.println();
+                    return;
+                }
             }
+        }
+    }
 
+    // ---------- Search flow ----------
+    private static void searchMenu() {
+        List<Integer> lastResults = doSearchOnce();
+
+        while (true) {
             System.out.print("[search] Enter action ([number], back, again): ");
             String cmd = sc.nextLine().trim();
 
             if ("back".equals(cmd)) return;
+
             if ("again".equals(cmd)) {
-                System.out.println();
+                lastResults = doSearchOnce();
                 continue;
             }
 
-            int pick;
-            try {
-                pick = Integer.parseInt(cmd) - 1;
-            } catch (NumberFormatException e) {
-                return;
+            if (isNumber(cmd)) {
+                int pos = Integer.parseInt(cmd) - 1;
+                if (pos >= 0 && pos < lastResults.size()) {
+                    int realIndex = lastResults.get(pos);
+                    recordMenu(realIndex);
+                    System.out.println();
+                    return;
+                }
             }
-            if (pick < 0 || pick >= found.size()) return;
-
-            System.out.println();
-            System.out.println();
-            recordMenu(found.get(pick));
-            System.out.println();
-            keepSearching = false;
         }
     }
 
-    static List<Integer> searchIndexes(String query) {
-        List<Integer> result = new ArrayList<>();
-        Pattern p;
+    private static List<Integer> doSearchOnce() {
+        System.out.print("Enter search query: ");
+        String q = sc.nextLine();
 
+        Pattern pattern;
         try {
-            p = Pattern.compile(query, Pattern.CASE_INSENSITIVE);
+            pattern = Pattern.compile(q, Pattern.CASE_INSENSITIVE);
         } catch (PatternSyntaxException e) {
-            p = Pattern.compile(Pattern.quote(query), Pattern.CASE_INSENSITIVE);
+            // if user typed bad regex, treat it as plain text
+            pattern = Pattern.compile(Pattern.quote(q), Pattern.CASE_INSENSITIVE);
         }
 
-        for (int i = 0; i < book.count(); i++) {
-            String hay = book.get(i).getSearchText();
-            if (p.matcher(hay).find()) {
-                result.add(i);
+        List<Integer> results = new ArrayList<>();
+        for (int i = 0; i < contacts.size(); i++) {
+            String text = contacts.get(i).getSearchText();
+            if (pattern.matcher(text).find()) {
+                results.add(i);
             }
         }
-        return result;
+
+        System.out.println("Found " + results.size() + " results:");
+        for (int i = 0; i < results.size(); i++) {
+            System.out.println((i + 1) + ". " + contacts.get(results.get(i)).getListName());
+        }
+        return results;
     }
 
-    static void recordMenu(int idx) {
-        Record r = book.get(idx);
-        r.printInfo();
+    // ---------- Record flow ----------
+    private static void recordMenu(int idx) {
+        Contact c = contacts.get(idx);
+        c.printInfo();
+        System.out.println();
 
         while (true) {
             System.out.print("[record] Enter action (edit, delete, menu): ");
-            String cmd = sc.nextLine().trim();
+            String action = sc.nextLine().trim();
 
-            if ("menu".equals(cmd)) {
-                System.out.println();
-                return;
-            }
+            if ("menu".equals(action)) return;
 
-            if ("delete".equals(cmd)) {
-                book.remove(idx);
+            if ("delete".equals(action)) {
+                contacts.remove(idx);
+                save();
                 System.out.println("The record removed!");
-                saveIfNeeded();
-                System.out.println(); // ✅ blank line after action
+                printSavedIfFile();
                 return;
             }
 
-            if ("edit".equals(cmd)) {
-                List<String> fields = r.getEditableFields();
-
-                System.out.print("Select a field (");
-                for (int i = 0; i < fields.size(); i++) {
-                    System.out.print(fields.get(i));
-                    if (i + 1 < fields.size()) System.out.print(", ");
-                }
-                System.out.println("): ");
-
-                String field = sc.nextLine().trim();
-                System.out.print("Enter " + field + ": ");
-                String value = sc.nextLine();
-
-                r.setFieldValue(field, value);
-                System.out.println("Saved");
-                saveIfNeeded();
-                r.printInfo();
-                System.out.println(); // ✅ blank line after action
+            if ("edit".equals(action)) {
+                editRecord(c);
+                save();
+                printSavedIfFile();
+                c.printInfo();
+                System.out.println();
             }
         }
     }
 
-    static void saveIfNeeded() {
-        if (filePath != null) {
-            save(filePath, book);
-        }
+    private static void editRecord(Contact c) {
+        String[] fields = c.getEditableFields();
+        System.out.print("Select a field (" + String.join(", ", fields) + "): ");
+        String field = sc.nextLine().trim();
+
+        System.out.print("Enter " + field + ": ");
+        String value = sc.nextLine();
+
+        c.setField(field, value);
+        System.out.println("The record updated!");
     }
 
-    static void save(String path, PhoneBook pb) {
-        try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(path))) {
-            oos.writeObject(pb);
-        } catch (IOException e) {
-            System.err.println("Failed to save phone book: " + e.getMessage());
+    // ---------- helpers ----------
+    private static boolean isNumber(String s) {
+        if (s == null || s.isEmpty()) return false;
+        for (char ch : s.toCharArray()) {
+            if (!Character.isDigit(ch)) return false;
         }
-    }
-
-    static PhoneBook load(String path) {
-        File f = new File(path);
-        if (!f.exists()) return new PhoneBook();
-
-        try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(path))) {
-            Object obj = ois.readObject();
-            if (obj instanceof PhoneBook) {
-                return (PhoneBook) obj;
-            }
-        } catch (IOException | ClassNotFoundException e) {
-            System.err.println("Failed to load phone book: " + e.getMessage());
-        }
-        return new PhoneBook();
+        return true;
     }
 }
